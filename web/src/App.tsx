@@ -6,14 +6,18 @@ import {
   Cloud,
   Copy,
   Download,
+  ExternalLink,
   FileText,
   Github,
+  Globe2,
   KeyRound,
   Loader2,
   PenLine,
+  Plus,
   Rocket,
   ShieldCheck,
   Sparkles,
+  Trash2,
 } from 'lucide-react'
 
 const app = initPro({ appId: 'freedocstore-editor' })
@@ -67,6 +71,17 @@ interface PublishStep {
   state: StepState
 }
 
+interface KnowledgeBaseDraft extends PublishForm {
+  id: string
+  files: RepoFile[]
+  liveUrl: string
+  repoUrl: string
+  lastStatus: string
+  createdAt: string
+  updatedAt: string
+  steps: PublishStep[]
+}
+
 const emptySettings: Settings = {
   githubToken: '',
   openaiKey: '',
@@ -102,6 +117,71 @@ const initialSteps: PublishStep[] = [
   { id: 'deploy', label: 'Deploy', detail: 'GitHub Actions publishes to Cloudflare', state: 'idle' },
 ]
 
+function cloneSteps() {
+  return initialSteps.map((step) => ({ ...step }))
+}
+
+function nowIso() {
+  return new Date().toISOString()
+}
+
+function createKnowledgeBase(form: PublishForm): KnowledgeBaseDraft {
+  const timestamp = nowIso()
+  return {
+    ...form,
+    customDomain: normalizeDomain(form.customDomain),
+    id: crypto.randomUUID(),
+    files: [],
+    liveUrl: '',
+    repoUrl: '',
+    lastStatus: 'Draft',
+    createdAt: timestamp,
+    updatedAt: timestamp,
+    steps: cloneSteps(),
+  }
+}
+
+function normalizeKnowledgeBase(value: Partial<KnowledgeBaseDraft> & PublishForm): KnowledgeBaseDraft {
+  const base = createKnowledgeBase({ ...starterPublish, ...value })
+  return {
+    ...base,
+    id: value.id || base.id,
+    files: Array.isArray(value.files) ? value.files : [],
+    liveUrl: value.liveUrl || '',
+    repoUrl: value.repoUrl || '',
+    lastStatus: value.lastStatus || 'Draft',
+    createdAt: value.createdAt || base.createdAt,
+    updatedAt: value.updatedAt || base.updatedAt,
+    steps: Array.isArray(value.steps) && value.steps.length ? value.steps : cloneSteps(),
+  }
+}
+
+function toPublishForm(kb: KnowledgeBaseDraft): PublishForm {
+  return {
+    title: kb.title,
+    slug: kb.slug,
+    owner: kb.owner,
+    customDomain: kb.customDomain,
+    visibility: kb.visibility,
+    prompt: kb.prompt,
+  }
+}
+
+function liveTargetFor(form: Pick<PublishForm, 'slug' | 'customDomain'>) {
+  return form.customDomain ? `https://${form.customDomain}/` : `https://${form.slug}.pages.dev/`
+}
+
+function nextAvailableSlug(kbs: KnowledgeBaseDraft[], desired: string) {
+  const base = slugify(desired) || 'knowledge-base'
+  const used = new Set(kbs.map((kb) => kb.slug))
+  if (!used.has(base)) return base
+  for (let i = 2; i < 1000; i++) {
+    const candidate = `${base}-${i}`
+    if (!used.has(candidate)) return candidate
+  }
+  return `${base}-${Date.now()}`
+}
+
 function App() {
   return (
     <ProShell app={app} appName="FreeDocStore Editor" allowFree showThemeToggle>
@@ -114,34 +194,60 @@ function EditorApp() {
   const { user } = useAuth(app)
   const [mode, setMode] = useState<Mode>('publish')
   const [settings, setSettings] = useState<Settings>(emptySettings)
-  const [publishForm, setPublishForm] = useState<PublishForm>(starterPublish)
+  const [kbs, setKbs] = useState<KnowledgeBaseDraft[]>(() => [createKnowledgeBase(starterPublish)])
+  const [activeKbId, setActiveKbId] = useState('')
   const [editForm, setEditForm] = useState<EditForm>(starterEdit)
-  const [files, setFiles] = useState<RepoFile[]>([])
   const [source, setSource] = useState('')
   const [proposal, setProposal] = useState<Proposal | null>(null)
   const [diff, setDiff] = useState('')
   const [activePreview, setActivePreview] = useState<'files' | 'source' | 'proposal' | 'diff'>('files')
-  const [steps, setSteps] = useState<PublishStep[]>(initialSteps)
   const [status, setStatus] = useState('Ready')
   const [busy, setBusy] = useState(false)
-  const [liveUrl, setLiveUrl] = useState('')
+
+  const activeKb = kbs.find((kb) => kb.id === activeKbId) ?? kbs[0] ?? createKnowledgeBase(starterPublish)
+  const publishForm = toPublishForm(activeKb)
+  const files = activeKb?.files ?? []
+  const steps = activeKb?.steps ?? cloneSteps()
+  const liveUrl = activeKb?.liveUrl ?? ''
 
   useEffect(() => {
     const saved = sessionStorage.getItem('fds-editor-settings')
     if (saved) setSettings({ ...emptySettings, ...JSON.parse(saved) })
-    const pub = localStorage.getItem('fds-publish-draft')
-    if (pub) setPublishForm({ ...starterPublish, ...JSON.parse(pub) })
+    const savedKbs = localStorage.getItem('fds-kb-drafts')
+    if (savedKbs) {
+      const parsed = JSON.parse(savedKbs)
+      if (Array.isArray(parsed) && parsed.length) {
+        const normalized = parsed.map(normalizeKnowledgeBase)
+        setKbs(normalized)
+        setActiveKbId(localStorage.getItem('fds-active-kb') || normalized[0].id)
+      }
+    } else {
+      const pub = localStorage.getItem('fds-publish-draft')
+      if (pub) {
+        const legacy = createKnowledgeBase({ ...starterPublish, ...JSON.parse(pub) })
+        setKbs([legacy])
+        setActiveKbId(legacy.id)
+      }
+    }
     const edit = localStorage.getItem('fds-edit-draft')
     if (edit) setEditForm({ ...starterEdit, ...JSON.parse(edit) })
   }, [])
+
+  useEffect(() => {
+    if (!activeKbId && kbs[0]) setActiveKbId(kbs[0].id)
+  }, [activeKbId, kbs])
 
   useEffect(() => {
     sessionStorage.setItem('fds-editor-settings', JSON.stringify(settings))
   }, [settings])
 
   useEffect(() => {
-    localStorage.setItem('fds-publish-draft', JSON.stringify(publishForm))
-  }, [publishForm])
+    localStorage.setItem('fds-kb-drafts', JSON.stringify(kbs))
+  }, [kbs])
+
+  useEffect(() => {
+    if (activeKbId) localStorage.setItem('fds-active-kb', activeKbId)
+  }, [activeKbId])
 
   useEffect(() => {
     localStorage.setItem('fds-edit-draft', JSON.stringify(editForm))
@@ -152,63 +258,147 @@ function EditorApp() {
     return `${files.length} file${files.length === 1 ? '' : 's'} ready: ${files.map((f) => f.path).join(', ')}`
   }, [files])
 
+  function updateActiveKb(patch: Partial<KnowledgeBaseDraft>) {
+    const id = activeKb?.id
+    if (!id) return
+    setKbs((current) => current.map((kb) => (kb.id === id ? { ...kb, ...patch, updatedAt: nowIso() } : kb)))
+  }
+
+  function updateActiveForm(form: PublishForm) {
+    updateActiveKb({ ...form })
+  }
+
+  function setKbSteps(id: string, updater: PublishStep[] | ((current: PublishStep[]) => PublishStep[])) {
+    setKbs((current) =>
+      current.map((kb) =>
+        kb.id === id
+          ? { ...kb, steps: typeof updater === 'function' ? updater(kb.steps) : updater, updatedAt: nowIso() }
+          : kb,
+      ),
+    )
+  }
+
+  function setKbPatch(id: string, patch: Partial<KnowledgeBaseDraft>) {
+    setKbs((current) => current.map((kb) => (kb.id === id ? { ...kb, ...patch, updatedAt: nowIso() } : kb)))
+  }
+
+  function createNewKb() {
+    const owner = activeKb?.owner || starterPublish.owner
+    const next = createKnowledgeBase({
+      ...starterPublish,
+      title: 'Untitled Knowledge Base',
+      slug: nextAvailableSlug(kbs, 'new-knowledge-base'),
+      owner,
+      customDomain: '',
+      prompt: '',
+    })
+    setKbs((current) => [next, ...current])
+    setActiveKbId(next.id)
+    setMode('publish')
+    setActivePreview('files')
+    setStatus('New KB draft ready')
+  }
+
+  function duplicateActiveKb() {
+    if (!activeKb) return
+    const copy = createKnowledgeBase({
+      ...toPublishForm(activeKb),
+      title: `${activeKb.title} Copy`,
+      slug: nextAvailableSlug(kbs, `${activeKb.slug}-copy`),
+      customDomain: '',
+    })
+    setKbs((current) => [copy, ...current])
+    setActiveKbId(copy.id)
+    setMode('publish')
+    setActivePreview('files')
+    setStatus('KB draft duplicated')
+  }
+
+  function deleteActiveKb() {
+    if (!activeKb || kbs.length === 1) return
+    const next = kbs.filter((kb) => kb.id !== activeKb.id)
+    setKbs(next)
+    setActiveKbId(next[0].id)
+    setActivePreview('files')
+    setStatus('KB draft removed')
+  }
+
   async function generateFiles() {
+    if (!activeKb) return
+    const kbId = activeKb.id
+    const form = toPublishForm(activeKb)
     setBusy(true)
     setStatus('Generating Zensical KB files')
-    setSteps(resetSteps('plan', 'busy'))
+    setKbSteps(kbId, resetSteps('plan', 'busy'))
+    setKbPatch(kbId, { lastStatus: 'Generating files' })
     try {
-      validatePublishForm(publishForm)
+      validatePublishForm(form)
       validateAi(settings)
-      setSteps(updateStep('plan', 'ok', 'Zensical contract ready'))
-      setSteps(updateStep('ai', 'busy', 'Asking AI for source files'))
-      const nextFiles = await generateKbFiles(settings, publishForm)
+      setKbSteps(kbId, updateStep('plan', 'ok', 'Zensical contract ready'))
+      setKbSteps(kbId, updateStep('ai', 'busy', 'Asking AI for source files'))
+      const nextFiles = await generateKbFiles(settings, form)
       validateKbFiles(nextFiles)
-      setFiles(nextFiles)
+      setKbPatch(kbId, { files: nextFiles, lastStatus: 'Files generated' })
       setActivePreview('files')
-      setSteps(updateStep('ai', 'ok', `${nextFiles.length} files generated`))
+      setKbSteps(kbId, updateStep('ai', 'ok', `${nextFiles.length} files generated`))
       setStatus('Files generated. Review, then publish.')
     } catch (error) {
       setStatus(messageOf(error))
-      setSteps(markCurrentError(steps))
+      setKbPatch(kbId, { lastStatus: messageOf(error) })
+      setKbSteps(kbId, markCurrentError)
     } finally {
       setBusy(false)
     }
   }
 
   async function publishToGitHub() {
+    if (!activeKb) return
+    const kbId = activeKb.id
+    const form = toPublishForm(activeKb)
     setBusy(true)
     setStatus('Publishing KB repo')
+    setKbPatch(kbId, { lastStatus: 'Publishing' })
     try {
-      if (!files.length) {
-        await generateFiles()
+      let readyFiles = activeKb.files
+      if (!readyFiles.length) {
+        validatePublishForm(form)
+        validateAi(settings)
+        setKbSteps(kbId, resetSteps('plan', 'busy'))
+        setKbSteps(kbId, updateStep('plan', 'ok', 'Zensical contract ready'))
+        setKbSteps(kbId, updateStep('ai', 'busy', 'Asking AI for source files'))
+        readyFiles = await generateKbFiles(settings, form)
+        validateKbFiles(readyFiles)
+        setKbPatch(kbId, { files: readyFiles })
+        setKbSteps(kbId, updateStep('ai', 'ok', `${readyFiles.length} files generated`))
       }
-      const readyFiles = files.length ? files : await generateKbFiles(settings, publishForm)
-      validatePublishForm(publishForm)
+      validatePublishForm(form)
       validateKbFiles(readyFiles)
       validateGitHub(settings)
       validateCloudflare(settings)
 
-      setSteps(updateStep('repo', 'busy', 'Creating repository'))
-      const repo = await createRepo(settings.githubToken, publishForm)
-      setSteps(updateStep('repo', 'ok', repo.html_url))
+      setKbSteps(kbId, updateStep('repo', 'busy', 'Creating repository'))
+      const repo = await createRepo(settings.githubToken, form)
+      setKbSteps(kbId, updateStep('repo', 'ok', repo.html_url))
+      setKbPatch(kbId, { repoUrl: repo.html_url })
 
-      setSteps(updateStep('files', 'busy', 'Writing files to main'))
+      setKbSteps(kbId, updateStep('files', 'busy', 'Writing files to main'))
       await writeFiles(settings.githubToken, repo.full_name, readyFiles)
-      setSteps(updateStep('files', 'ok', `${readyFiles.length} files committed`))
+      setKbSteps(kbId, updateStep('files', 'ok', `${readyFiles.length} files committed`))
 
-      setSteps(updateStep('secrets', 'busy', 'Saving Cloudflare secrets'))
+      setKbSteps(kbId, updateStep('secrets', 'busy', 'Saving Cloudflare secrets'))
       await putGitHubSecret(settings.githubToken, repo.full_name, 'CLOUDFLARE_ACCOUNT_ID', settings.cloudflareAccountId)
       await putGitHubSecret(settings.githubToken, repo.full_name, 'CLOUDFLARE_API_TOKEN', settings.cloudflareApiToken)
-      setSteps(updateStep('secrets', 'ok', 'Repository secrets configured'))
+      setKbSteps(kbId, updateStep('secrets', 'ok', 'Repository secrets configured'))
 
-      const url = `https://${publishForm.slug}.pages.dev/`
-      setLiveUrl(publishForm.customDomain ? `https://${publishForm.customDomain}/` : url)
-      setSteps(updateStep('deploy', 'ok', 'Workflow started on GitHub'))
+      const url = liveTargetFor(form)
+      setKbPatch(kbId, { liveUrl: url, lastStatus: 'Published' })
+      setKbSteps(kbId, updateStep('deploy', 'ok', 'Workflow started on GitHub'))
       setStatus('Published. GitHub Actions is building the Zensical site.')
       window.open(`${repo.html_url}/actions`, '_blank', 'noopener,noreferrer')
     } catch (error) {
       setStatus(messageOf(error))
-      setSteps(markCurrentError(steps))
+      setKbPatch(kbId, { lastStatus: messageOf(error) })
+      setKbSteps(kbId, markCurrentError)
     } finally {
       setBusy(false)
     }
@@ -288,11 +478,24 @@ function EditorApp() {
 
       <div className="workspace-grid">
         <section className="panel control-panel">
+          {mode === 'publish' && (
+            <KnowledgeBaseShelf
+              kbs={kbs}
+              activeId={activeKb?.id ?? ''}
+              onSelect={(id) => {
+                setActiveKbId(id)
+                setActivePreview('files')
+              }}
+              onCreate={createNewKb}
+              onDuplicate={duplicateActiveKb}
+              onDelete={deleteActiveKb}
+            />
+          )}
           <SettingsPanel settings={settings} setSettings={setSettings} />
           {mode === 'publish' ? (
             <PublishPanel
               form={publishForm}
-              setForm={setPublishForm}
+              setForm={updateActiveForm}
               steps={steps}
               busy={busy}
               onGenerate={generateFiles}
@@ -324,6 +527,74 @@ function EditorApp() {
         Built for <a href="https://proappstore.online" target="_blank" rel="noreferrer">proappstore.online</a>
       </footer>
     </main>
+  )
+}
+
+function KnowledgeBaseShelf({
+  kbs,
+  activeId,
+  onSelect,
+  onCreate,
+  onDuplicate,
+  onDelete,
+}: {
+  kbs: KnowledgeBaseDraft[]
+  activeId: string
+  onSelect: (id: string) => void
+  onCreate: () => void
+  onDuplicate: () => void
+  onDelete: () => void
+}) {
+  return (
+    <div className="section-block kb-shelf">
+      <div className="section-title split-title">
+        <div className="title-row">
+          <BookOpen size={18} />
+          <div>
+            <h2>Knowledge bases</h2>
+            <p>{kbs.length} draft{kbs.length === 1 ? '' : 's'} in this browser</p>
+          </div>
+        </div>
+        <button className="icon-action" type="button" onClick={onCreate} aria-label="Create KB">
+          <Plus size={18} />
+        </button>
+      </div>
+      <div className="kb-list" aria-label="Knowledge base drafts">
+        {kbs.map((kb) => {
+          const active = kb.id === activeId
+          const target = liveTargetFor(kb)
+          return (
+            <article className={active ? 'kb-card active' : 'kb-card'} key={kb.id}>
+              <button className="kb-card-main" type="button" onClick={() => onSelect(kb.id)}>
+                <span className="kb-card-title">{kb.title || 'Untitled KB'}</span>
+                <span className="kb-card-meta">{kb.owner}/{kb.slug}</span>
+                <span className="kb-card-status">{kb.lastStatus || 'Draft'}</span>
+              </button>
+              <div className="kb-card-links">
+                <a href={target} target="_blank" rel="noreferrer" aria-label={`${kb.title} live target`}>
+                  <Globe2 size={15} />
+                </a>
+                {kb.repoUrl && (
+                  <a href={kb.repoUrl} target="_blank" rel="noreferrer" aria-label={`${kb.title} GitHub repository`}>
+                    <Github size={15} />
+                  </a>
+                )}
+              </div>
+            </article>
+          )
+        })}
+      </div>
+      <div className="action-row compact-actions">
+        <button className="secondary-action" type="button" onClick={onDuplicate}>
+          <Copy size={17} />
+          Duplicate
+        </button>
+        <button className="secondary-action danger-action" type="button" onClick={onDelete} disabled={kbs.length === 1}>
+          <Trash2 size={17} />
+          Delete
+        </button>
+      </div>
+    </div>
   )
 }
 
@@ -373,7 +644,7 @@ function PublishPanel({
       <div className="section-title">
         <BookOpen size={18} />
         <div>
-          <h2>New knowledge base</h2>
+          <h2>Publish selected KB</h2>
           <p>Generates a Zensical Markdown repo and deploy workflow.</p>
         </div>
       </div>
@@ -381,7 +652,17 @@ function PublishPanel({
         <Field label="Title" value={form.title} onChange={(v) => update('title', v)} />
         <Field label="Slug / Pages project" value={form.slug} onChange={(v) => update('slug', slugify(v))} />
         <Field label="GitHub owner" value={form.owner} onChange={(v) => update('owner', v)} />
-        <Field label="Custom domain" value={form.customDomain} onChange={(v) => update('customDomain', v.replace(/^https?:\/\//, '').replace(/\/$/, ''))} placeholder="docs.example.com" />
+        <Field label="Custom domain" value={form.customDomain} onChange={(v) => update('customDomain', normalizeDomain(v))} placeholder="docs.example.com" />
+      </div>
+      <div className="target-grid">
+        <div>
+          <span>Pages URL</span>
+          <strong>https://{form.slug || 'project'}.pages.dev/</strong>
+        </div>
+        <div className={form.customDomain ? 'target-domain active' : 'target-domain'}>
+          <span>Custom domain</span>
+          <strong>{form.customDomain ? `https://${form.customDomain}/` : 'Not attached'}</strong>
+        </div>
       </div>
       <label className="field">
         <span>Knowledge-base prompt</span>
@@ -418,7 +699,7 @@ function PublishPanel({
       </div>
       {liveUrl && (
         <a className="live-link" href={liveUrl} target="_blank" rel="noreferrer">
-          <Cloud size={17} />
+          <ExternalLink size={17} />
           Open live KB target
         </a>
       )}
@@ -616,7 +897,7 @@ async function generateKbFiles(settings: Settings, form: PublishForm): Promise<R
   const user = [
     `Title: ${form.title}`,
     `Slug: ${form.slug}`,
-    `Production URL: https://${form.slug}.pages.dev/`,
+    `Production URL: ${liveTargetFor(form)}`,
     form.customDomain ? `Custom domain: https://${form.customDomain}/` : 'Custom domain: none',
     '',
     'Required files:',
@@ -809,15 +1090,22 @@ ${domainStep}`
 
 function ensureFallbackFiles(files: RepoFile[], form: PublishForm, workflow: string): RepoFile[] {
   let next = [...files]
+  const siteUrl = liveTargetFor(form)
   next = upsertFile(next, '.github/workflows/deploy.yml', workflow)
   next = upsertFile(next, '.gitignore', 'site/\n.cache/\n.DS_Store\n')
   if (!next.some((file) => file.path === 'README.md')) {
     next.push({ path: 'README.md', content: `# ${form.title}\n\nFreeDocStore Zensical knowledge base.\n\nSource lives in \`docs/\` and builds with \`python -m zensical build --strict\`.\n` })
   }
-  if (!next.some((file) => file.path === 'zensical.toml')) {
+  const zensicalIndex = next.findIndex((file) => file.path === 'zensical.toml')
+  if (zensicalIndex >= 0) {
+    next[zensicalIndex] = {
+      ...next[zensicalIndex],
+      content: setTomlScalar(setTomlScalar(next[zensicalIndex].content, 'site_url', siteUrl), 'repo_url', `https://github.com/${form.owner}/${form.slug}`),
+    }
+  } else {
     next.push({
       path: 'zensical.toml',
-      content: `site_name = "${form.title.replace(/"/g, '\\"')}"\nsite_url = "https://${form.slug}.pages.dev/"\nrepo_url = "https://github.com/${form.owner}/${form.slug}"\ndocs_dir = "docs"\nsite_dir = "site"\n\n[nav]\nitems = [\n  { title = "Overview", path = "index.md" },\n  { title = "First Principles", path = "first-principles.md" },\n  { title = "Assessment Method", path = "assessment-method.md" },\n  { title = "Register", path = "register.md" },\n]\n`,
+      content: `site_name = "${form.title.replace(/"/g, '\\"')}"\nsite_url = "${siteUrl}"\nrepo_url = "https://github.com/${form.owner}/${form.slug}"\ndocs_dir = "docs"\nsite_dir = "site"\n\n[nav]\nitems = [\n  { title = "Overview", path = "index.md" },\n  { title = "First Principles", path = "first-principles.md" },\n  { title = "Assessment Method", path = "assessment-method.md" },\n  { title = "Register", path = "register.md" },\n]\n`,
     })
   }
   if (!next.some((file) => file.path === 'docs/index.md')) {
@@ -841,6 +1129,7 @@ function validatePublishForm(form: PublishForm) {
   if (!form.title.trim()) throw new Error('Title is required.')
   if (!/^[a-z][a-z0-9-]{1,57}$/.test(form.slug)) throw new Error('Slug must be lowercase letters, numbers, and hyphens.')
   if (!form.owner.trim()) throw new Error('GitHub owner is required.')
+  if (form.customDomain && !isValidDomain(form.customDomain)) throw new Error('Custom domain must be a valid hostname.')
   if (!form.prompt.trim()) throw new Error('Prompt is required.')
 }
 
@@ -891,6 +1180,26 @@ function parseJson(text: string) {
 
 function slugify(value: string) {
   return value.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 58)
+}
+
+function normalizeDomain(value: string) {
+  return value
+    .trim()
+    .toLowerCase()
+    .replace(/^https?:\/\//, '')
+    .replace(/\/.*$/, '')
+    .replace(/\.$/, '')
+}
+
+function isValidDomain(value: string) {
+  return /^(?=.{4,253}$)([a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/.test(value)
+}
+
+function setTomlScalar(content: string, key: string, value: string) {
+  const escaped = value.replace(/\\/g, '\\\\').replace(/"/g, '\\"')
+  const line = `${key} = "${escaped}"`
+  const pattern = new RegExp(`^${key}\\s*=\\s*".*"$`, 'm')
+  return pattern.test(content) ? content.replace(pattern, line) : `${line}\n${content}`
 }
 
 function textToBase64(text: string) {

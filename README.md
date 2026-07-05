@@ -4,6 +4,8 @@ Self-serve editor and publisher for FreeDocStore knowledge bases, hosted on ProA
 
 Live target: <https://freedocstore-editor.proappstore.online>
 
+Canonical source: `apps/editor/` in <https://github.com/FreeDocStore/platform>.
+
 The app is Zensical-only:
 
 - one GitHub repo per KB
