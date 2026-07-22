@@ -21,7 +21,7 @@ import {
   UserCircle,
 } from 'lucide-react'
 
-const app = initPro({ appId: 'freedocstore-editor' })
+const app = initPro({ appId: 'freedocstore-editor', authMode: 'platform-cookie' })
 const DEFAULT_MODEL = 'gpt-4.1-mini'
 const DEFAULT_ENDPOINT = 'https://api.openai.com/v1/chat/completions'
 const FDS_MCP = 'https://freedocstore-mcp.serge-the-dev.workers.dev/mcp'
