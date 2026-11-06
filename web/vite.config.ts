@@ -44,8 +44,8 @@ export default defineConfig({
         orientation: 'any',
         ...({ min_viewport_width: 360 } as Record<string, unknown>),
         icons: [
-          { src: '/icon-192.png', sizes: '192x192', type: 'image/png', purpose: 'any maskable' },
-          { src: '/icon-512.png', sizes: '512x512', type: 'image/png', purpose: 'any maskable' },
+          { src: '/app-icon-192.png', sizes: '192x192', type: 'image/png', purpose: 'any maskable' },
+          { src: '/app-icon-512.png', sizes: '512x512', type: 'image/png', purpose: 'any maskable' },
           { src: '/icon.svg', sizes: 'any', type: 'image/svg+xml', purpose: 'any' },
         ],
       },
